@@ -50,6 +50,9 @@ int draw_n_vertices;
 int draw_n_elements;
 GLuint atlas_texture;
 int tmp_ctx_error;
+struct lsl_rect clipping_rect;
+int viewport_height;
+union lsl_vec2 dotuv;
 
 #define MAX_WIN (32)
 
@@ -281,6 +284,7 @@ static void draw_flush()
 	glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, draw_n_elements * sizeof(GLushort), draw_elements);
 
 	glBindTexture(GL_TEXTURE_2D, atlas_texture);
+	glScissor(clipping_rect.x, viewport_height - clipping_rect.h - clipping_rect.y, clipping_rect.w, clipping_rect.h);
 	glDrawElements(GL_TRIANGLES, draw_n_elements, GL_UNSIGNED_SHORT, 0);
 
 	draw_n_vertices = 0;
@@ -310,8 +314,8 @@ static void draw_append(int n_vertices, int n_elements, struct draw_vertex* vert
 
 static void draw_glyph(struct glyph* gly)
 {
-	float dx0 = cursor_x + gly->xoff;
-	float dy0 = cursor_y + gly->yoff;
+	float dx0 = cursor_x + gly->xoff + clipping_rect.x;
+	float dy0 = cursor_y + gly->yoff + clipping_rect.y;
 	float dx1 = dx0 + gly->w;
 	float dy1 = dy0 + gly->h;
 	float u0 = (float)gly->x / (float)atlas_width;
@@ -329,6 +333,43 @@ static void draw_glyph(struct glyph* gly)
 
 	draw_append(4, 6, vs, es);
 
+}
+
+void lsl_begin(struct lsl_rect* r)
+{
+	// TODO allow nested?
+	clipping_rect = *r;
+}
+
+void lsl_end()
+{
+	draw_flush();
+}
+
+void lsl_rect(struct lsl_rect* r)
+{
+	float dx0 = r->x + clipping_rect.x;
+	float dy0 = r->y + clipping_rect.y;
+	float dx1 = dx0 + r->w;
+	float dy1 = dy0 + r->h;
+
+	struct draw_vertex vs[4] = {
+		{ .position = { .x = dx0, .y = dy0 }, .uv = dotuv, .color = draw_color0 },
+		{ .position = { .x = dx1, .y = dy0 }, .uv = dotuv, .color = draw_color0 },
+		{ .position = { .x = dx1, .y = dy1 }, .uv = dotuv, .color = draw_color1 },
+		{ .position = { .x = dx0, .y = dy1 }, .uv = dotuv, .color = draw_color1 }
+	};
+	GLushort es[6] = {0,1,2,0,2,3};
+
+	draw_append(4, 6, vs, es);
+}
+
+void lsl_clear()
+{
+	struct lsl_rect r = clipping_rect;
+	// clear x/y because lsl_rect is relative to clipping_rect
+	r.x = 0; r.y = 0;
+	lsl_rect(&r);
 }
 
 void lsl_main_loop()
@@ -438,10 +479,16 @@ void lsl_main_loop()
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER); CHKGL;
 
 		free(bitmap);
+
+		// setup dotuv
+		struct glyph* gly = &types[0].glyphs[0];
+		dotuv = (union lsl_vec2) { .u = (float)(gly->x+1) / (float)atlas_width, .v = (float)(gly->y+1) / (float)atlas_height };
 	}
 
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); CHKGL;
+
+	glEnable(GL_SCISSOR_TEST);
 
 	for (;;) {
 		while (XPending(dpy)) {
@@ -492,13 +539,10 @@ void lsl_main_loop()
 			// fetch window dimensions
 			struct lsl_frame* f = &lw->frame;
 			get_dim(lw->window, &f->w, &f->h);
+			viewport_height = f->h;
 
 			glXMakeCurrent(dpy, lw->window, ctx);
 			glViewport(0, 0, f->w, f->h);
-
-			// XXX vvv remove this later? (only required now because app dies if no gl commands are sent)
-			glClearColor(0, 0.1, 0.3, 1);
-			glClear(GL_COLOR_BUFFER_BIT);
 
 			glUseProgram(glprg);
 			glUniform1i(u_texture, 0);

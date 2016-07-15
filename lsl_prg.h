@@ -22,6 +22,10 @@ union lsl_vec4 {
 	struct { float r, g, b, a; };
 };
 
+struct lsl_rect {
+	int x,y,w,h;
+};
+
 struct lsl_frame {
 	int w, h;
 
@@ -42,6 +46,10 @@ void lsl_set_vertical_gradient(union lsl_vec4 color0, union lsl_vec4 color1);
 void lsl_set_color(union lsl_vec4 color);
 void lsl_putch(int codepoint);
 int lsl_printf(const char* fmt, ...);
+void lsl_begin(struct lsl_rect*);
+void lsl_end();
+void lsl_rect(struct lsl_rect*);
+void lsl_clear();
 void lsl_win_open(const char* title, int(*proc)(struct lsl_frame*, void*), void* usr);
 void lsl_main_loop();
 
