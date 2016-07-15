@@ -17,7 +17,7 @@ mkatlas: mkatlas.c
 	$(CC) $(CFLAGS) $(LINK) $^ -o $@
 
 default.atls: mkatlas
-	./mkatlas ter-u18n.bdf ter-u12n.bdf default.atls
+	./mkatlas default.atls ter-u18n.bdf ter-u12n.bdf ter-u14b.bdf
 
 lsl-4th: lsl_prg.o lsl_4th.o
 	$(CC) $(LINK) $^ -o $@

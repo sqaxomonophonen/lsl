@@ -49,8 +49,6 @@ static void hex2pixels(char* str, char* out, size_t sz)
 }
 
 
-#define N (3)
-
 struct glyph {
 	struct stbrp_rect rect;
 	int codepoint;
@@ -85,15 +83,21 @@ static void fwrite_s32(FILE* f, int v)
 	fwrite(&v, sizeof(v), 1, f);
 }
 
-static int try_sz(int sz, char** filenames, char* outfile)
+#define MAX_N (1024)
+
+static int try_sz(int sz, char* outfile, int n, char** filenames)
 {
+	assert(n < MAX_N);
+
+	n++; // reserve 1 type for dot
+
 	printf("trying %d×%d...\n", sz, sz);
 
 	char line[4096];
-	struct glyph* glyphs[N];
-	int n_glyphs[N];
-	int heights[N];
-	int baselines[N];
+	struct glyph* glyphs[MAX_N];
+	int n_glyphs[MAX_N];
+	int heights[MAX_N];
+	int baselines[MAX_N];
 
 	// dot
 	n_glyphs[0] = 1;
@@ -106,7 +110,7 @@ static int try_sz(int sz, char** filenames, char* outfile)
 
 	int n_total_rects = 1; // 1 reserved for dot
 
-	for (int i = 1; i < N; i++) {
+	for (int i = 1; i < n; i++) {
 		char* filename = filenames[i-1];
 		FILE* f = fopen(filename, "r");
 		assert(f);
@@ -193,8 +197,8 @@ static int try_sz(int sz, char** filenames, char* outfile)
 	struct stbrp_rect* all_rects = calloc(1, n_total_rects * sizeof(*all_rects));
 	assert(all_rects);
 
-	int offset = 1;
-	for (int i = 0; i < N; i++) {
+	int offset = 0;
+	for (int i = 0; i < n; i++) {
 		for (int j = 0; j < n_glyphs[i]; j++) {
 			memcpy(all_rects + offset, &glyphs[i][j].rect, sizeof(stbrp_rect));
 			offset++;
@@ -219,7 +223,7 @@ static int try_sz(int sz, char** filenames, char* outfile)
 	char dot[] = {255, 255, 255, 255};
 	blit(bitmap, sz, dot, 2, 2, all_rects[ari].x, all_rects[ari].y);
 	ari++;
-	for (int i = 1; i < N; i++) {
+	for (int i = 1; i < n; i++) {
 		char* filename = filenames[i-1];
 		FILE* f = fopen(filename, "r");
 		assert(f);
@@ -246,10 +250,10 @@ static int try_sz(int sz, char** filenames, char* outfile)
 	fwrite_s32(f, 1); // version
 	fwrite_s32(f, sz); // width
 	fwrite_s32(f, sz); // height
-	fwrite_s32(f, N); // number of types
+	fwrite_s32(f, n); // number of types
 
 	// write number of glyphs for each type
-	for (int i = 0; i < N; i++) {
+	for (int i = 0; i < n; i++) {
 		fwrite_s32(f, n_glyphs[i]);
 		fwrite_s16(f, heights[i]);
 		fwrite_s16(f, baselines[i]);
@@ -257,7 +261,7 @@ static int try_sz(int sz, char** filenames, char* outfile)
 
 	// write glyph data
 	ari = 0;
-	for (int i = 0; i < N; i++) {
+	for (int i = 0; i < n; i++) {
 		for (int j = 0; j < n_glyphs[i]; j++) {
 			fwrite_s32(f, glyphs[i][j].codepoint);
 			fwrite_s16(f, all_rects[ari].w - 1);
@@ -281,13 +285,15 @@ static int try_sz(int sz, char** filenames, char* outfile)
 
 int main(int argc, char** argv)
 {
-	if (argc != 4) {
-		fprintf(stderr, "usage: %s <font.bdf> <symbols.bdf> <out.atlas>\n", argv[0]);
+	if (argc < 3) {
+		fprintf(stderr, "usage: %s <out.atlas> <bdf 1> [bdf 2]...\n", argv[0]);
 		exit(EXIT_FAILURE);
 	}
 
+	int n = argc - 2;
+
 	for (int sz = 512; sz <= 8192; sz <<= 1) {
-		if (try_sz(sz, argv+1, argv[3])) {
+		if (try_sz(sz, argv[1], n, argv + 2)) {
 			exit(EXIT_SUCCESS);
 		}
 	}
