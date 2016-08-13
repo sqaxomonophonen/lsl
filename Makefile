@@ -3,14 +3,20 @@ OPT=-g -O0
 STD=-std=gnu99
 CFLAGS=$(OPT) $(STD) -Wall -Igl3w/include $(USE)
 LINK=-lm -lX11 -lGL -lrt -Wall
-BIN=lsl-4th mkatlas
+BIN=l4 mkatlas
 
 all: $(BIN) default.atls
+
+dynary.o: dynary.c dynary.h
+	$(CC) $(CFLAGS) -c $<
 
 lsl_prg.o: lsl_prg.c lsl_prg.h
 	$(CC) $(CFLAGS) -c $<
 
-lsl_4th.o: lsl_4th.c
+l4.o: l4.c
+	$(CC) $(CFLAGS) -c $<
+
+l4d.o: l4d.c
 	$(CC) $(CFLAGS) -c $<
 
 mkatlas: mkatlas.c
@@ -19,7 +25,7 @@ mkatlas: mkatlas.c
 default.atls: mkatlas
 	./mkatlas default.atls ter-u18n.bdf ter-u12n.bdf ter-u14b.bdf
 
-lsl-4th: lsl_prg.o lsl_4th.o
+l4: l4.o l4d.o dynary.o lsl_prg.o
 	$(CC) $(LINK) $^ -o $@
 
 clean:

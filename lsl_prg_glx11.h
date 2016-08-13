@@ -11,9 +11,11 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <math.h>
 
 #include <X11/Xlib.h>
 #include <X11/XKBlib.h>
+#include <X11/cursorfont.h>
 
 #define GL_GLEXT_PROTOTYPES
 #include <GL/glx.h>
@@ -50,22 +52,28 @@ int draw_n_vertices;
 int draw_n_elements;
 GLuint atlas_texture;
 int tmp_ctx_error;
-struct lsl_rect clipping_rect;
 int viewport_height;
 union lsl_vec2 dotuv;
+Cursor cursor_default;
+Cursor cursor_horiz;
+Cursor cursor_vert;
+Cursor cursor_cross;
+
+Cursor current_cursor;
+Cursor last_cursor;
 
 #define MAX_WIN (32)
 
 struct win {
 	int open;
-	int(*proc)(struct lsl_frame*, void*);
+	int(*proc)(void*);
 	void* usr;
 	Window window;
 	XIC xic;
 	struct lsl_frame frame;
 } wins[MAX_WIN];
 
-void lsl_win_open(const char* title, int(*proc)(struct lsl_frame*, void*), void* usr)
+void lsl_win_open(const char* title, int(*proc)(void*), void* usr)
 {
 	struct win* lw = NULL;
 	for (int i = 0; i < MAX_WIN; i++) {
@@ -206,14 +214,13 @@ static void handle_key_event(XKeyEvent* e, struct win* lw)
 	}
 }
 
-static void get_dim(Window w, int* width, int* height)
+static union lsl_vec2 get_dim_vec2(Window w)
 {
 	Window _root;
 	int _x, _y;
 	unsigned int _width, _height, _border_width, _depth;
 	XGetGeometry(dpy, w, &_root, &_x, &_y, &_width, &_height, &_border_width, &_depth);
-	if (width != NULL) *width = _width;
-	if (height != NULL) *height = _height;
+	return (union lsl_vec2) { .w = _width, .h = _height };
 }
 
 static GLuint create_shader(const char* src, GLenum type)
@@ -284,7 +291,6 @@ static void draw_flush()
 	glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, draw_n_elements * sizeof(GLushort), draw_elements);
 
 	glBindTexture(GL_TEXTURE_2D, atlas_texture);
-	glScissor(clipping_rect.x, viewport_height - clipping_rect.h - clipping_rect.y, clipping_rect.w, clipping_rect.h);
 	glDrawElements(GL_TRIANGLES, draw_n_elements, GL_UNSIGNED_SHORT, 0);
 
 	draw_n_vertices = 0;
@@ -312,16 +318,30 @@ static void draw_append(int n_vertices, int n_elements, struct draw_vertex* vert
 	draw_n_elements += n_elements;
 }
 
-static void draw_glyph(struct glyph* gly)
+static void draw_rect(struct lsl_rect posrect, struct lsl_rect uvrect)
 {
-	float dx0 = cursor_x + gly->xoff + clipping_rect.x;
-	float dy0 = cursor_y + gly->yoff + clipping_rect.y;
-	float dx1 = dx0 + gly->w;
-	float dy1 = dy0 + gly->h;
-	float u0 = (float)gly->x / (float)atlas_width;
-	float v0 = (float)gly->y / (float)atlas_height;
-	float u1 = (float)(gly->x + gly->w) / (float)atlas_width;
-	float v1 = (float)(gly->y + gly->h) / (float)atlas_height;
+	struct lsl_rect fr = lsl_frame_top()->rect;
+
+	struct lsl_rect rx = posrect;
+	rx.p0 = lsl_vec2_add(rx.p0, fr.p0);
+
+	struct lsl_rect apos, auv;
+	for (int i = 0; i < 2; i++) {
+		apos.p0.s[i] = fmax(rx.p0.s[i], fr.p0.s[i]);
+		apos.dim.s[i] = fmin(rx.p0.s[i] + rx.dim.s[i], fr.p0.s[i] + fr.dim.s[i]) - apos.p0.s[i];
+		if (apos.dim.s[i] <= 0) return;
+		auv.p0.s[i] = uvrect.p0.s[i] + uvrect.dim.s[i] * (apos.p0.s[i] - rx.p0.s[i]) / rx.dim.s[i];
+		auv.dim.s[i] = uvrect.dim.s[i] * (apos.dim.s[i] / rx.dim.s[i]);
+	}
+
+	float dx0 = apos.p0.x;
+	float dy0 = apos.p0.y;
+	float dx1 = dx0 + apos.dim.w;
+	float dy1 = dy0 + apos.dim.h;
+	float u0 = auv.p0.u;
+	float v0 = auv.p0.v;
+	float u1 = u0 + auv.dim.w;
+	float v1 = v0 + auv.dim.h;
 
 	struct draw_vertex vs[4] = {
 		{ .position = { .x = dx0, .y = dy0 }, .uv = { .u = u0, .v = v0 }, .color = draw_color0 },
@@ -332,44 +352,50 @@ static void draw_glyph(struct glyph* gly)
 	GLushort es[6] = {0,1,2,0,2,3};
 
 	draw_append(4, 6, vs, es);
-
 }
 
-void lsl_begin(struct lsl_rect* r)
+static void draw_glyph(struct glyph* gly)
 {
-	// TODO allow nested?
-	clipping_rect = *r;
+	draw_rect(
+		(struct lsl_rect) {
+			.p0 = { .x = cursor_x + gly->xoff, .y = cursor_y + gly->yoff },
+			.dim = { .w = gly->w, .h = gly->h }
+		},
+		(struct lsl_rect) {
+			.p0 = { .x = (float)gly->x / (float)atlas_width, .y = (float)gly->y / (float)atlas_height },
+			.dim = { .w = (float)gly->w / (float)atlas_width, .h = (float)gly->h / (float)atlas_height }
+		}
+	);
 }
 
-void lsl_end()
+void lsl_fill_rect(struct lsl_rect* r)
 {
-	draw_flush();
-}
-
-void lsl_rect(struct lsl_rect* r)
-{
-	float dx0 = r->x + clipping_rect.x;
-	float dy0 = r->y + clipping_rect.y;
-	float dx1 = dx0 + r->w;
-	float dy1 = dy0 + r->h;
-
-	struct draw_vertex vs[4] = {
-		{ .position = { .x = dx0, .y = dy0 }, .uv = dotuv, .color = draw_color0 },
-		{ .position = { .x = dx1, .y = dy0 }, .uv = dotuv, .color = draw_color0 },
-		{ .position = { .x = dx1, .y = dy1 }, .uv = dotuv, .color = draw_color1 },
-		{ .position = { .x = dx0, .y = dy1 }, .uv = dotuv, .color = draw_color1 }
-	};
-	GLushort es[6] = {0,1,2,0,2,3};
-
-	draw_append(4, 6, vs, es);
+	draw_rect(*r, (struct lsl_rect) { .p0 = dotuv, .dim = { .w = 0, .h = 0 }});
 }
 
 void lsl_clear()
 {
-	struct lsl_rect r = clipping_rect;
-	// clear x/y because lsl_rect is relative to clipping_rect
-	r.x = 0; r.y = 0;
-	lsl_rect(&r);
+	struct lsl_rect r;
+	r.p0.x = r.p0.y = 0;
+	r.dim = lsl_frame_top()->rect.dim;
+	lsl_fill_rect(&r);
+}
+
+void lsl_set_pointer(int id)
+{
+	Cursor c = cursor_default;
+	switch (id) {
+		case LSL_POINTER_HORIZONTAL:
+			c = cursor_horiz;
+			break;
+		case LSL_POINTER_VERTICAL:
+			c = cursor_vert;
+			break;
+		case LSL_POINTER_4WAY:
+			c = cursor_cross;
+			break;
+	}
+	current_cursor = c;
 }
 
 void lsl_main_loop()
@@ -488,8 +514,6 @@ void lsl_main_loop()
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); CHKGL;
 
-	glEnable(GL_SCISSOR_TEST);
-
 	for (;;) {
 		while (XPending(dpy)) {
 			XEvent xe;
@@ -504,12 +528,14 @@ void lsl_main_loop()
 
 			switch (xe.type) {
 				case EnterNotify:
-					f->mx = xe.xcrossing.x;
-					f->my = xe.xcrossing.y;
+					f->minside = 1;
+					f->mpos.x = xe.xcrossing.x;
+					f->mpos.y = xe.xcrossing.y;
 					break;
 				case LeaveNotify:
-					f->mx = -1;
-					f->my = -1;
+					f->minside = 0;
+					f->mpos.x = 0;
+					f->mpos.y = 0;
 					break;
 				case ButtonPress:
 				case ButtonRelease:
@@ -522,8 +548,9 @@ void lsl_main_loop()
 				}
 				break;
 				case MotionNotify:
-					f->mx = xe.xmotion.x;
-					f->my = xe.xmotion.y;
+					f->minside = 1;
+					f->mpos.x = xe.xmotion.x;
+					f->mpos.y = xe.xmotion.y;
 					break;
 				case KeyPress:
 				case KeyRelease:
@@ -538,20 +565,30 @@ void lsl_main_loop()
 
 			// fetch window dimensions
 			struct lsl_frame* f = &lw->frame;
-			get_dim(lw->window, &f->w, &f->h);
-			viewport_height = f->h;
+			f->rect.p0.x = f->rect.p0.y = 0;
+			f->rect.dim = get_dim_vec2(lw->window);
+			viewport_height = f->rect.dim.h;
 
 			glXMakeCurrent(dpy, lw->window, ctx);
-			glViewport(0, 0, f->w, f->h);
+			glViewport(0, 0, f->rect.dim.w, f->rect.dim.h);
 
 			glUseProgram(glprg);
 			glUniform1i(u_texture, 0);
-			glUniform2f(u_scaling, 1.0f / (float)f->w, -1.0f / (float)f->h);
+			glUniform2f(u_scaling, 1.0f / (float)f->rect.dim.w, -1.0f / (float)f->rect.dim.h);
 
 			glBindVertexArray(vertex_array);
 
+			current_cursor = cursor_default;
+
+			frame_stack_reset(f);
+
 			// run user callback
-			int ret = lw->proc(f, lw->usr);
+			int ret = lw->proc(lw->usr);
+
+			if (current_cursor != last_cursor) {
+				XDefineCursor(dpy, RootWindow(dpy, vis->screen), current_cursor);
+				last_cursor = current_cursor;
+			}
 
 			draw_flush();
 
@@ -732,7 +769,14 @@ int main(int argc, char** argv)
 		XSetErrorHandler(old_handler);
 	}
 
+	cursor_default = XCreateFontCursor(dpy, XC_left_ptr);
+	cursor_horiz = XCreateFontCursor(dpy, XC_sb_h_double_arrow);
+	cursor_vert = XCreateFontCursor(dpy, XC_sb_v_double_arrow);
+	cursor_cross = XCreateFontCursor(dpy, XC_fleur);
+
 	int exit_status = lsl_main(argc, argv);
+
+	XDefineCursor(dpy, RootWindow(dpy, vis->screen), cursor_default);
 
 	XCloseDisplay(dpy);
 
