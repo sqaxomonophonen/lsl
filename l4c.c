@@ -58,7 +58,7 @@ enum token_type {
 	T_UNION,
 	T_ENUM,
 
-	//T__TYPMIN,
+	T__TYPMIN,
 	T_AUTO,
 	T_TYPEOF,
 	T_VOID,
@@ -72,7 +72,7 @@ enum token_type {
 	T_I64,
 	T_F32,
 	T_F64,
-	//T__TYPMAX,
+	T__TYPMAX,
 
 	//T__PNCTMIN,
 	T_COMMA,
@@ -93,6 +93,11 @@ enum token_type {
 
 	T_EOF
 };
+
+static inline int token_type_is_type(enum token_type tt)
+{
+	return tt > T__TYPMIN && tt < T__TYPMAX;
+}
 
 struct token {
 	enum token_type type;
@@ -461,12 +466,6 @@ static inline int sexpr_is_atom(struct sexpr* e)
 	}
 }
 
-static inline int sexpr_match_atom(struct sexpr* e, enum token_type tt)
-{
-	if (!sexpr_is_atom(e)) return 0;
-	return e->atom.type == tt;
-}
-
 static inline int sexpr_is_list(struct sexpr* e)
 {
 	return e->atom.type == T_LPAREN;
@@ -665,7 +664,7 @@ static struct sexpr* parse_expr_rec(struct parser* p, int rbp, int depth)
 	{
 		enum token_type tt = t.type;
 		int bp;
-		if (tt == T_NUMBER || tt == T_IDENTIFIER) {
+		if (tt == T_NUMBER || tt == T_IDENTIFIER || token_type_is_type(tt)) {
 			left = sexpr_new_atom(t);
 		} else if ((bp = prefix_bp(tt)) != -1) {
 			struct sexpr* operand = parse_expr_rec(p, bp, depth+1);
@@ -702,10 +701,12 @@ static struct sexpr* parse_expr_rec(struct parser* p, int rbp, int depth)
 			if (right == NULL) return NULL;
 			left = sexpr_new_list(sexpr_new_atom(t), left, right, NULL);
 		} else if (t.type == T_LPAREN) { // parse call
-			if (!sexpr_match_atom(left, T_IDENTIFIER)) {
-				/* FIXME allow if identifier is a base type?
-				 * e.g. f32(x) is legal in an expression but
-				 * struct(x) is not */
+			if (!sexpr_is_atom(left)) {
+				parser_err_unexp(p);
+				return NULL;
+			}
+			enum token_type tt = left->atom.type;
+			if (tt != T_IDENTIFIER && !token_type_is_type(tt)) {
 				parser_err_unexp(p);
 				return NULL;
 			}
@@ -843,6 +844,7 @@ int main(int argc, char** argv)
 	test_parse_expr("x*y+3.1415+x", "(+ (+ (* x y) 3.1415) x)");
 	test_parse_expr("fn()", "(CALL fn)");
 	test_parse_expr("fn(x)", "(CALL fn x)");
+	test_parse_expr("i8(x)", "(CALL i8 x)");
 	test_parse_expr("1 + fn(x)", "(+ 1 (CALL fn x))");
 	test_parse_expr("fn(2*x+1)", "(CALL fn (+ (* 2 x) 1))");
 	test_parse_expr("fn(x)+2", "(+ (CALL fn x) 2)");
