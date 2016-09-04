@@ -556,9 +556,16 @@ static void parser_err_unexp(struct parser* p)
 	parser_errf(p, "unexpected token");
 }
 
+static void parser_err_exp(struct parser* p, enum token_type tt)
+{
+	parser_errf(p, "unexpected token (expected %d)", tt); // TODO token_type -> char*
+}
+
 static inline int prefix_bp(enum token_type tt)
 {
 	switch (tt) {
+		case T_LPAREN:
+			return 1;
 		case T_PLUS:
 		case T_MINUS:
 			// TODO
@@ -566,10 +573,6 @@ static inline int prefix_bp(enum token_type tt)
 		default:
 			return -1;
 	}
-}
-
-static inline int is_unary_op(enum token_type tt) {
-	return prefix_bp(tt) != -1;
 }
 
 static inline int infix_bp(enum token_type tt)
@@ -593,6 +596,16 @@ static inline int infix_bp(enum token_type tt)
 			return 100;
 		default:
 			return -1;
+	}
+}
+
+static inline int is_unary_op(enum token_type tt) {
+	switch (tt) {
+		case T_PLUS:
+		case T_MINUS:
+			return 1;
+		default:
+			return 0;
 	}
 }
 
@@ -628,6 +641,16 @@ static void parser_init(struct parser* p, char* src)
 	parser_next_token(p);
 }
 
+static int parser_expect(struct parser* p, enum token_type tt)
+{
+	struct token t = parser_next_token(p);
+	if (t.type != T_RPAREN) {
+		parser_err_exp(p, tt);
+		return 0;
+	}
+	return 1;
+}
+
 static struct sexpr* parse_expr_rec(struct parser* p, int rbp, int depth)
 {
 	if (depth >= 1024) {
@@ -649,6 +672,9 @@ static struct sexpr* parse_expr_rec(struct parser* p, int rbp, int depth)
 			if (operand == NULL) return NULL;
 			if (is_unary_op(tt)) {
 				left = sexpr_new_list(sexpr_new_atom(t), operand, NULL);
+			} else if (tt == T_LPAREN) {
+				left = operand;
+				if (!parser_expect(p, T_RPAREN)) return NULL;
 			} else {
 				parser_err_unexp(p);
 				return NULL;
@@ -810,7 +836,11 @@ int main(int argc, char** argv)
 	test_parse_expr("i=i+1", "(= i (+ i 1))");
 	test_parse_expr("1 + 2 * 3", "(+ 1 (* 2 3))");
 	test_parse_expr("1 * 2 + 3", "(+ (* 1 2) 3)");
-	test_parse_expr("foo*bar+3.1415+x", "(+ (+ (* foo bar) 3.1415) x)");
+	test_parse_expr("1 * (2 + 3)", "(* 1 (+ 2 3))");
+	test_parse_expr("(1 * (2 + 3))", "(* 1 (+ 2 3))");
+	test_parse_expr("i = (1 * (2 + 3))", "(= i (* 1 (+ 2 3)))");
+	test_parse_expr("(i = 20) + 22", "(+ (= i 20) 22)");
+	test_parse_expr("x*y+3.1415+x", "(+ (+ (* x y) 3.1415) x)");
 	test_parse_expr("fn()", "(CALL fn)");
 	test_parse_expr("fn(x)", "(CALL fn x)");
 	test_parse_expr("1 + fn(x)", "(+ 1 (CALL fn x))");
