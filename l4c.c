@@ -77,6 +77,7 @@ enum token_type {
 	//T__PNCTMIN,
 	T_COMMA,
 	T_SEMICOLON,
+	T_ASSIGN,
 	T_EQ,
 	T_NEQ,
 	T_PLUS,
@@ -341,6 +342,7 @@ static void* lex_main(struct lexer* l)
 		} pnct[] = {
 			{',', T_COMMA},
 			{';', T_SEMICOLON},
+			{'=', T_ASSIGN},
 			{'+', T_PLUS},
 			{'-', T_MINUS},
 			{'*', T_MUL},
@@ -579,6 +581,8 @@ static inline int infix_bp(enum token_type tt)
 		case T_RPAREN:
 		case T_SEMICOLON:
 			return 0;
+		case T_ASSIGN:
+			return 5;
 		case T_PLUS:
 		case T_MINUS:
 			return 40;
@@ -598,6 +602,7 @@ static inline int is_binary_op(enum token_type tt) {
 		case T_MINUS:
 		case T_MUL:
 		case T_DIV:
+		case T_ASSIGN:
 			return 1;
 		default:
 			return 0;
@@ -801,6 +806,8 @@ int main(int argc, char** argv)
 {
 	test_parse_expr("123", "123");
 	test_parse_expr("foo", "foo");
+	test_parse_expr("i=0", "(= i 0)");
+	test_parse_expr("i=i+1", "(= i (+ i 1))");
 	test_parse_expr("1 + 2 * 3", "(+ 1 (* 2 3))");
 	test_parse_expr("1 * 2 + 3", "(+ (* 1 2) 3)");
 	test_parse_expr("foo*bar+3.1415+x", "(+ (+ (* foo bar) 3.1415) x)");
