@@ -766,6 +766,39 @@ static struct sexpr* parse_expr_rec(struct parser* p, int rbp, int depth)
 	return left;
 }
 
+static struct sexpr* parse_type_rec(struct parser* p, int depth);
+
+static struct sexpr* parse_struct_body_rec(struct parser* p, int depth)
+{
+	struct sexpr* lst = sexpr_new_empty_list();
+	struct sexpr** lstc = sexpr_get_append_cursor(lst);
+
+	if (!parser_expect(p, T_LCURLY)) return NULL;
+	for (;;) {
+		struct token t = parser_next_token(p);
+		enum token_type tt = t.type;
+
+		if (tt == T_RCURLY) break;
+
+		if (tt != T_IDENTIFIER) {
+			parser_err_unexp(p);
+			return NULL;
+		}
+
+		struct sexpr* typ = parse_type_rec(p, depth+1);
+		if (typ == NULL) {
+			return NULL;
+		}
+
+		struct sexpr* m = sexpr_new_list(sexpr_new_atom(t), typ, NULL);
+		sexpr_append(&lstc, m);
+
+		if (!parser_expect(p, T_SEMICOLON)) return NULL;
+	}
+
+	return lst;
+}
+
 static struct sexpr* parse_type_rec(struct parser* p, int depth)
 {
 	struct sexpr* top = sexpr_new_empty_list();
@@ -804,7 +837,11 @@ static struct sexpr* parse_type_rec(struct parser* p, int depth)
 			sexpr_append(typc, sexpr_new_atom(t));
 			break;
 		} else if (tt == T_STRUCT) {
-			assert(!"TODO struct"); // TODO
+			struct sexpr* body = parse_struct_body_rec(p, depth+1);
+			if (body == NULL) return NULL;
+			got_typ = 1;
+			sexpr_append(typc, sexpr_new_atom(t));
+			sexpr_append(typc, body);
 		} else {
 			parser_rewind(p);
 			break;
@@ -852,7 +889,7 @@ static struct sexpr* parse_rec(struct parser* p, int depth, int fnlvl)
 				} else if (parser_accept(p, T_SEMICOLON)) {
 					got_semicolon = 1;
 				} else {
-					type = parse_type_rec(p, depth);
+					type = parse_type_rec(p, depth+1);
 					if (type == NULL) return NULL;
 					got_type = 1;
 				}
@@ -1057,7 +1094,10 @@ int main(int argc, char** argv)
 	test_parse("type x y;", "((type x (y)))");
 	test_parse("type x [4]y;", "((type x ((4 y))))");
 	test_parse("var x; const y;", "((var x ()) (const y ()))");
-	//test_parse("var x struct{x int}", "");
+	test_parse("var x struct { x int; y float; };", "((var x (struct ((x (int)) (y (float))))))");
+	test_parse("var x [4]struct { x int; y float; };", "((var x ((4 struct ((x (int)) (y (float)))))))");
+	test_parse("var x struct { x struct { y int; }; };", "((var x (struct ((x (struct ((y (int)))))))))");
+	test_parse("type T struct { x struct { y int; }; };", "((type T (struct ((x (struct ((y (int)))))))))");
 
 	if (n_failed) {
 		printf("\n %d TEST(S) FAILED\n", n_failed);
