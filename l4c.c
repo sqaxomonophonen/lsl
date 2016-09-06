@@ -793,6 +793,7 @@ static struct sexpr* parse_struct_body_rec(struct parser* p, int depth)
 		struct sexpr* m = sexpr_new_list(sexpr_new_atom(t), typ, NULL);
 		sexpr_append(&lstc, m);
 
+		if (parser_accept(p, T_RCURLY)) break;
 		if (!parser_expect(p, T_SEMICOLON)) return NULL;
 	}
 
@@ -1095,6 +1096,8 @@ int main(int argc, char** argv)
 	test_parse("type x [4]y;", "((type x ((4 y))))");
 	test_parse("var x; const y;", "((var x ()) (const y ()))");
 	test_parse("var x struct { x int; y float; };", "((var x (struct ((x (int)) (y (float))))))");
+	test_parse("var x struct { x int; y float };", "((var x (struct ((x (int)) (y (float))))))");
+	test_parse("var x struct { x int };", "((var x (struct ((x (int))))))");
 	test_parse("var x [4]struct { x int; y float; };", "((var x ((4 struct ((x (int)) (y (float)))))))");
 	test_parse("var x struct { x struct { y int; }; };", "((var x (struct ((x (struct ((y (int)))))))))");
 	test_parse("type T struct { x struct { y int; }; };", "((type T (struct ((x (struct ((y (int)))))))))");
