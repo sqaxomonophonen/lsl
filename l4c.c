@@ -28,52 +28,54 @@ static void str_print(struct str* s)
 #endif
 
 enum token_type {
-	T__META = 0, // for special sexpr tokens
+	T__META = 1, // for special sexpr tokens
 
 	T_NUMBER,
 
 	T_IDENTIFIER,
 
-	//T__KWMIN,
 	T_RETURN,
 	T_IF,
 	T_ELSE,
 	T_FOR,
 	T_BREAK,
 	T_CONTINUE,
+	T_FALLTHROUGH,
 	T_GOTO,
 	T_SWITCH,
 	T_CASE,
 	T_DEFAULT,
-	//T__KWMAX,
 
-	// top-level port qualifiers
+	T_TYPEOF,
+
+	T_TYPE,
+
+	T_CONST,
+	T_VAR,
+	T_FUNC,
+	T_STRUCT,
+
+	//T__MODMIN,
 	T_IN,
 	T_OUT,
-	T_SIGNAL,
-	T_UNIFORM,
-
-	T_STRUCT,
-	T_UNION,
-	T_ENUM,
+	//T__MODMAX,
 
 	T__TYPMIN,
-	T_AUTO,
-	T_TYPEOF,
+	//T_AUTO,
 	T_VOID,
 	T_BOOL,
 	T_INT,
 	T_UINT,
-	T_I8,
-	T_U8,
-	T_I32,
-	T_U32,
-	T_I64,
-	T_F32,
-	T_F64,
+	T_INT8,
+	T_UINT8,
+	T_INT32,
+	T_UINT32,
+	T_INT64,
+	T_UINT64,
+	T_FLOAT32,
+	T_FLOAT64,
 	T__TYPMAX,
 
-	//T__PNCTMIN,
 	T_COMMA,
 	T_SEMICOLON,
 	T_ASSIGN,
@@ -86,14 +88,17 @@ enum token_type {
 	T_MOD,
 	T_LPAREN,
 	T_RPAREN,
-	//T__PNCTMAX,
+	T_LCURLY,
+	T_RCURLY,
+	T_LBRACKET,
+	T_RBRACKET,
 
 	T_WHITESPACE,
 
 	T_EOF
 };
 
-static inline int token_type_is_type(enum token_type tt)
+static int tt_is_type(enum token_type tt)
 {
 	return tt > T__TYPMIN && tt < T__TYPMAX;
 }
@@ -345,6 +350,10 @@ static void* lex_main(struct lexer* l)
 			{'%', T_MOD},
 			{'(', T_LPAREN},
 			{')', T_RPAREN},
+			{'{', T_LCURLY},
+			{'}', T_RCURLY},
+			{'[', T_LBRACKET},
+			{']', T_RBRACKET},
 			// TODO
 			{0}
 		};
@@ -390,33 +399,37 @@ static void promote_identifer_if_keyword(struct token* t)
 	PRM("for", T_FOR);
 	PRM("break", T_BREAK);
 	PRM("continue", T_CONTINUE);
+	PRM("fallthrough", T_FALLTHROUGH);
 	PRM("goto", T_GOTO);
 	PRM("switch", T_SWITCH);
 	PRM("case", T_CASE);
 	PRM("default", T_DEFAULT);
 
+	PRM("typeof", T_TYPEOF);
+
+	PRM("type", T_TYPE);
+
+	PRM("const", T_CONST);
+	PRM("var", T_VAR);
+	PRM("func", T_FUNC);
+	PRM("struct", T_STRUCT);
+
 	PRM("in", T_IN);
 	PRM("out", T_OUT);
-	PRM("signal", T_SIGNAL);
-	PRM("uniform", T_UNIFORM);
 
-	PRM("struct", T_STRUCT);
-	PRM("union", T_UNION);
-	PRM("enum", T_ENUM);
-
-	PRM("auto", T_AUTO);
-	PRM("typeof", T_TYPEOF);
+	//PRM("auto", T_AUTO);
 	PRM("void", T_VOID);
 	PRM("bool", T_BOOL);
 	PRM("int", T_INT);
 	PRM("uint", T_UINT);
-	PRM("i8", T_I8);
-	PRM("u8", T_U8);
-	PRM("i32", T_I32);
-	PRM("u32", T_U32);
-	PRM("i64", T_I64);
-	PRM("f32", T_F32);
-	PRM("f64", T_F64);
+	PRM("int8", T_INT8);
+	PRM("uint8", T_UINT8);
+	PRM("int32", T_INT32);
+	PRM("uint32", T_UINT32);
+	PRM("int64", T_INT64);
+	PRM("uint64", T_UINT64);
+	PRM("float32", T_FLOAT32);
+	PRM("float64", T_FLOAT64);
 }
 #undef PRM
 
@@ -480,18 +493,26 @@ static struct sexpr* sexpr_new_list(struct sexpr* head, ...)
 	struct sexpr* e = sexpr_new();
 	e->atom.type = T_LPAREN; // XXX or use special? T__LIST?
 	e->sexpr = head;
-	struct sexpr* cur = head;
 
-	va_list args;
-	va_start(args, head);
-	for (;;) {
-		struct sexpr* arg = va_arg(args, struct sexpr*);
-		if (arg == NULL) break;
-		cur->next = arg;
-		cur = cur->next;
+	if (head != NULL) {
+		struct sexpr* cur = head;
+		va_list args;
+		va_start(args, head);
+		for (;;) {
+			struct sexpr* arg = va_arg(args, struct sexpr*);
+			if (arg == NULL) break;
+			cur->next = arg;
+			cur = cur->next;
+		}
+		va_end(args);
 	}
-	va_end(args);
+
 	return e;
+}
+
+static struct sexpr* sexpr_new_empty_list()
+{
+	return sexpr_new_list(NULL);
 }
 
 static struct sexpr** sexpr_get_append_cursor(struct sexpr* e)
@@ -502,12 +523,12 @@ static struct sexpr** sexpr_get_append_cursor(struct sexpr* e)
 	return cursor;
 }
 
-static struct sexpr** sexpr_append(struct sexpr** append_cursor, struct sexpr* e)
+static void sexpr_append(struct sexpr*** append_cursor, struct sexpr* e)
 {
 	assert(e->next == NULL);
-	assert(*append_cursor == NULL);
-	*append_cursor = e;
-	return &e->next;
+	assert(**append_cursor == NULL);
+	**append_cursor = e;
+	*append_cursor = &e->next;
 }
 
 
@@ -518,7 +539,8 @@ static struct sexpr** sexpr_append(struct sexpr** append_cursor, struct sexpr* e
 
 struct parser {
 	struct lexer lexer;
-	struct token next_token;
+	struct token current_token, next_token, stashed_token;
+	int can_rewind, has_stashed_token;
 
 	int err;
 };
@@ -550,6 +572,58 @@ static void parser_err_exp(struct parser* p, enum token_type tt)
 	parser_errf(p, "unexpected token (expected %d)", tt); // TODO token_type -> char*
 }
 
+static inline struct token parser_next_token(struct parser* p)
+{
+	p->current_token = p->next_token;
+	if (p->has_stashed_token) {
+		p->next_token = p->stashed_token;
+		p->has_stashed_token = 0;
+	} else {
+		p->next_token = lexer_next(&p->lexer);
+	}
+	p->can_rewind = 1;
+	return p->current_token;
+}
+
+static void parser_init(struct parser* p, char* src)
+{
+	memset(p, 0, sizeof(*p));
+	lexer_init(&p->lexer, src);
+	parser_next_token(p);
+}
+
+static inline void parser_rewind(struct parser* p)
+{
+	assert(p->can_rewind);
+	p->stashed_token = p->next_token;
+	p->next_token = p->current_token;
+	p->can_rewind = 0;
+	p->has_stashed_token = 1;
+	memset(&p->current_token, 0, sizeof(p->current_token));
+}
+
+static int parser_accept(struct parser* p, enum token_type tt)
+{
+	struct token t = parser_next_token(p);
+	if (t.type != tt) {
+		parser_rewind(p);
+		return 0;
+	} else {
+		return 1;
+	}
+}
+
+static int parser_expect(struct parser* p, enum token_type tt)
+{
+	if (!parser_accept(p, tt)) {
+		parser_err_exp(p, tt);
+		return 0;
+	}
+	return 1;
+}
+
+// parse
+
 static inline int prefix_bp(enum token_type tt)
 {
 	switch (tt) {
@@ -571,6 +645,7 @@ static inline int infix_bp(enum token_type tt)
 		case T_EOF:
 		case T_COMMA:
 		case T_RPAREN:
+		case T_RBRACKET:
 		case T_SEMICOLON:
 			return 0;
 		case T_ASSIGN:
@@ -616,30 +691,6 @@ static inline int is_binary_op_right_associcative(enum token_type tt)
 	return 0; // TODO
 }
 
-static inline struct token parser_next_token(struct parser* p)
-{
-	struct token t = p->next_token;
-	p->next_token = lexer_next(&p->lexer);
-	return t;
-}
-
-static void parser_init(struct parser* p, char* src)
-{
-	memset(p, 0, sizeof(*p));
-	lexer_init(&p->lexer, src);
-	parser_next_token(p);
-}
-
-static int parser_expect(struct parser* p, enum token_type tt)
-{
-	struct token t = parser_next_token(p);
-	if (t.type != T_RPAREN) {
-		parser_err_exp(p, tt);
-		return 0;
-	}
-	return 1;
-}
-
 static struct sexpr* parse_expr_rec(struct parser* p, int rbp, int depth)
 {
 	if (depth >= 1024) {
@@ -654,7 +705,7 @@ static struct sexpr* parse_expr_rec(struct parser* p, int rbp, int depth)
 	{
 		enum token_type tt = t.type;
 		int bp;
-		if (tt == T_NUMBER || tt == T_IDENTIFIER || token_type_is_type(tt)) {
+		if (tt == T_NUMBER || tt == T_IDENTIFIER || tt_is_type(tt)) {
 			left = sexpr_new_atom(t);
 		} else if ((bp = prefix_bp(tt)) != -1) {
 			struct sexpr* operand = parse_expr_rec(p, bp, depth+1);
@@ -697,7 +748,7 @@ static struct sexpr* parse_expr_rec(struct parser* p, int rbp, int depth)
 			while (more) {
 				struct sexpr* a = parse_expr_rec(p, 0, depth+1);
 				if (a == NULL) return NULL;
-				cursor = sexpr_append(cursor, a);
+				sexpr_append(&cursor, a);
 
 				if (p->next_token.type != T_RPAREN && p->next_token.type != T_COMMA) {
 					parser_err_unexp(p);
@@ -715,10 +766,149 @@ static struct sexpr* parse_expr_rec(struct parser* p, int rbp, int depth)
 	return left;
 }
 
-static struct sexpr* parse_expr(struct parser* p)
+static struct sexpr* parse_type_rec(struct parser* p, int depth)
 {
-	return parse_expr_rec(p, 0, 0);
+	struct sexpr* top = sexpr_new_empty_list();
+	struct sexpr** topc = sexpr_get_append_cursor(top);
+
+	int got_mod = 0;
+	int got_typ = 0;
+	struct sexpr*** typc = &topc;
+	struct sexpr** tmpc;
+	for (;;) {
+		if (parser_accept(p, T_LBRACKET)) {
+			struct sexpr* sz = NULL;
+			struct sexpr* arr;
+			if (!parser_accept(p, T_RBRACKET)) {
+				sz = parse_expr_rec(p, 0, depth+1);
+				if (sz == NULL || !parser_expect(p, T_RBRACKET)) return NULL;
+				arr = sexpr_new_list(sz, NULL);
+			} else {
+				arr = sexpr_new_empty_list();
+			}
+			sexpr_append(typc, arr);
+			tmpc = sexpr_get_append_cursor(arr);
+			typc = &tmpc;
+			continue;
+		}
+
+		struct token t = parser_next_token(p);
+		enum token_type tt = t.type;
+		if (!got_mod && (tt == T_IN || tt == T_OUT)) {
+			got_mod = 1;
+			sexpr_append(typc, sexpr_new_atom(t));
+			typc = &topc;
+			continue;
+		} else if (tt == T_IDENTIFIER || tt_is_type(tt)) {
+			got_typ = 1;
+			sexpr_append(typc, sexpr_new_atom(t));
+			break;
+		} else if (tt == T_STRUCT) {
+			assert(!"TODO struct"); // TODO
+		} else {
+			parser_rewind(p);
+			break;
+		}
+	}
+
+	if (!got_mod && !got_typ) {
+		parser_err_unexp(p);
+		return NULL;
+	}
+
+	return top;
 }
+
+static struct sexpr* parse_rec(struct parser* p, int depth, int fnlvl)
+{
+	struct sexpr* ss = sexpr_new_list(NULL);
+	struct sexpr** ssc = sexpr_get_append_cursor(ss);
+
+	for (;;) {
+		struct token t = parser_next_token(p);
+		enum token_type tt = t.type;
+
+		if (tt == T_EOF) break;
+
+		int is_valdef = tt == T_VAR || tt == T_CONST;
+		if (is_valdef || tt == T_TYPE || tt == T_FUNC) {
+			struct token identifier = parser_next_token(p);
+			if (identifier.type != T_IDENTIFIER) {
+				parser_err_unexp(p);
+				return NULL;
+			}
+			struct sexpr* def = sexpr_new_list(sexpr_new_atom(t), sexpr_new_atom(identifier), NULL);
+			struct sexpr** defc = sexpr_get_append_cursor(def);
+
+			int got_semicolon = 0;
+
+			if (is_valdef) {
+				struct sexpr* type = NULL;
+				int got_assign = 0;
+				int got_type = 0;
+				int got_expr = 0;
+				if (parser_accept(p, T_ASSIGN)) {
+					got_assign = 1;
+				} else if (parser_accept(p, T_SEMICOLON)) {
+					got_semicolon = 1;
+				} else {
+					type = parse_type_rec(p, depth);
+					if (type == NULL) return NULL;
+					got_type = 1;
+				}
+
+				if (type == NULL) type = sexpr_new_empty_list();
+				sexpr_append(&defc, type);
+
+				if (!got_semicolon && (got_assign || parser_accept(p, T_ASSIGN))) {
+					struct sexpr* expr = parse_expr_rec(p, 0, depth+1);
+					if (expr == NULL) return NULL;
+					sexpr_append(&defc, expr);
+					got_expr = 1;
+				}
+			} else if (tt == T_TYPE) {
+				struct sexpr* type = parse_type_rec(p, depth);
+				if (type == NULL) return NULL;
+				sexpr_append(&defc, type);
+			} else if (tt == T_FUNC) {
+				assert(!"TODO func parse");
+				if (!parser_expect(p, T_LPAREN)) return NULL;
+				// TODO parse argument list
+				if (!parser_expect(p, T_RPAREN)) return NULL;
+				// TODO parse return list
+
+				if (!parser_expect(p, T_LCURLY)) return NULL;
+
+				struct sexpr* body = parse_rec(p, depth+1, fnlvl+1);
+				if (body == NULL) {
+					parser_err_unexp(p);
+					return NULL;
+				}
+
+				if (!parser_expect(p, T_RCURLY)) return NULL;
+			} else {
+				assert(0);
+			}
+
+			if (!got_semicolon && !parser_expect(p, T_SEMICOLON)) return NULL;
+
+			sexpr_append(&ssc, def);
+
+			continue;
+		}
+
+		// function body statements
+		if (fnlvl > 0) {
+			assert(!"TODO stmt"); // TODO
+			continue;
+		}
+
+		parser_err_unexp(p);
+		return NULL;
+	}
+	return ss;
+}
+
 
 
 #ifdef TEST
@@ -791,18 +981,36 @@ static char* sexpr_str(struct sexpr* e)
 	return s;
 }
 
+static void validate(struct parser* p, char* src, struct sexpr* actual_sexpr, char* expected_sexpr_str)
+{
+	if (actual_sexpr == NULL) {
+		printf(FAIL "parse error for '%s'\n", src);
+		return;
+	}
+
+	char* actual_sexpr_str = sexpr_str(actual_sexpr);
+	if (strcmp(actual_sexpr_str, expected_sexpr_str) == 0) {
+		printf(OK "%s => %s\n", src, actual_sexpr_str);
+	} else {
+		printf(FAIL "%s parsed to '%s', expected '%s'\n", src, actual_sexpr_str, expected_sexpr_str);
+		n_failed++;
+	}
+}
+
 static void test_parse_expr(char* src, char* expected_sexpr_str)
 {
 	struct parser p;
 	parser_init(&p, src);
-	struct sexpr* actual_expr = parse_expr(&p);
-	char* actual_expr_str = sexpr_str(actual_expr);
-	if (strcmp(actual_expr_str, expected_sexpr_str) == 0) {
-		printf(OK "%s => %s\n", src, actual_expr_str);
-	} else {
-		printf(FAIL "%s parsed to '%s', expected '%s'\n", src, actual_expr_str, expected_sexpr_str);
-		n_failed++;
-	}
+	struct sexpr* actual_sexpr = parse_expr_rec(&p, 0, 0);
+	validate(&p, src, actual_sexpr, expected_sexpr_str);
+}
+
+static void test_parse(char* src, char* expected_sexpr_str)
+{
+	struct parser p;
+	parser_init(&p, src);
+	struct sexpr* actual_sexpr = parse_rec(&p, 0, 0);
+	validate(&p, src, actual_sexpr, expected_sexpr_str);
 }
 
 int main(int argc, char** argv)
@@ -829,6 +1037,27 @@ int main(int argc, char** argv)
 	test_parse_expr("fn(x,y)", "(fn x y)");
 	test_parse_expr("fn(x+2,3*y)", "(fn (+ x 2) (* 3 y))");
 	test_parse_expr("foo(x+2,3*y)*4", "(* (foo (+ x 2) (* 3 y)) 4)");
+
+	test_parse("var x = 5;", "((var x () 5))");
+	test_parse("const x = 5;", "((const x () 5))");
+	test_parse("var x int = 5;", "((var x (int) 5))");
+	test_parse("var x int;", "((var x (int)))");
+	test_parse("var x out;", "((var x (out)))");
+	test_parse("var x []int;", "((var x ((int))))");
+	test_parse("var x [][]int;", "((var x (((int)))))");
+	test_parse("var x [4]int;", "((var x ((4 int))))");
+	test_parse("var x [5][4]out;", "((var x ((5 (4 out)))))");
+	test_parse("var x out int;", "((var x (out int)))");
+	test_parse("var x [3]out [4]int;", "((var x ((3 out) (4 int))))");
+	test_parse("const x [2][3]out [4][5]int = 5;", "((const x ((2 (3 out)) (4 (5 int))) 5))");
+	test_parse("var x [N*K]int;", "((var x (((* N K) int))))");
+	test_parse("const x in;", "((const x (in)))");
+	test_parse("const x;", "((const x ()))"); // invalid, but a type-checker problem?
+	test_parse("type MyInt int;", "((type MyInt (int)))");
+	test_parse("type x y;", "((type x (y)))");
+	test_parse("type x [4]y;", "((type x ((4 y))))");
+	test_parse("var x; const y;", "((var x ()) (const y ()))");
+	//test_parse("var x struct{x int}", "");
 
 	if (n_failed) {
 		printf("\n %d TEST(S) FAILED\n", n_failed);
