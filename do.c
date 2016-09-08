@@ -34,6 +34,27 @@ enum token_type {
 
 	T_IDENTIFIER,
 
+	T__IDPREDEF_MIN,
+
+	T_TRUE,
+	T_FALSE,
+
+	T__TYPMIN,
+	T_BOOL,
+	T_INT,
+	T_UINT,
+	T_INT8,
+	T_UINT8,
+	T_INT32,
+	T_UINT32,
+	T_INT64,
+	T_UINT64,
+	T_FLOAT32,
+	T_FLOAT64,
+	T__TYPMAX,
+
+	T__IDPREDEF_MAX,
+
 	T_RETURN,
 	T_IF,
 	T_ELSE,
@@ -60,25 +81,13 @@ enum token_type {
 	T_OUT,
 	//T__MODMAX,
 
-	T__TYPMIN,
-	T_BOOL,
-	T_INT,
-	T_UINT,
-	T_INT8,
-	T_UINT8,
-	T_INT32,
-	T_UINT32,
-	T_INT64,
-	T_UINT64,
-	T_FLOAT32,
-	T_FLOAT64,
-	T__TYPMAX,
-
 	T_COMMA,
 	T_SEMICOLON,
 	T_ASSIGN,
 	T_EQ,
 	T_NEQ,
+	T_INC,
+	T_DEC,
 	T_PLUS,
 	T_MINUS,
 	T_MUL,
@@ -116,10 +125,10 @@ typedef void* (*lexer_state_fn)(struct lexer*);
 
 struct lexer {
 	struct str src;
-	int line, column;
+	int line, previous_token_line, column;
 	int pos;
 	int start;
-	struct token token;
+	struct token token, previous_token;
 	int has_token;
 	lexer_state_fn state_fn;
 };
@@ -312,6 +321,8 @@ static void* lex_main(struct lexer* l)
 		} pnct[] = {
 			{"==", T_EQ},
 			{"!=", T_NEQ},
+			{"++", T_INC},
+			{"--", T_DEC},
 			// TODO
 			{NULL}
 		};
@@ -391,13 +402,28 @@ static void promote_identifer_if_keyword(struct token* t)
 {
 	if (t->type != T_IDENTIFIER) return;
 
+	PRM("true", T_TRUE);
+	PRM("false", T_FALSE);
+
+	PRM("bool", T_BOOL);
+	PRM("int", T_INT);
+	PRM("uint", T_UINT);
+	PRM("int8", T_INT8);
+	PRM("uint8", T_UINT8);
+	PRM("int32", T_INT32);
+	PRM("uint32", T_UINT32);
+	PRM("int64", T_INT64);
+	PRM("uint64", T_UINT64);
+
+	PRM("float32", T_FLOAT32);
+	PRM("float64", T_FLOAT64);
 	PRM("return", T_RETURN);
 	PRM("if", T_IF);
 	PRM("else", T_ELSE);
 	PRM("for", T_FOR);
 	PRM("break", T_BREAK);
 	PRM("continue", T_CONTINUE);
-	//PRM("fallthrough", T_FALLTHROUGH);
+	PRM("fallthrough", T_FALLTHROUGH);
 	PRM("goto", T_GOTO);
 	PRM("switch", T_SWITCH);
 	PRM("case", T_CASE);
@@ -414,29 +440,42 @@ static void promote_identifer_if_keyword(struct token* t)
 
 	PRM("in", T_IN);
 	PRM("out", T_OUT);
-
-	PRM("bool", T_BOOL);
-	PRM("int", T_INT);
-	PRM("uint", T_UINT);
-	PRM("int8", T_INT8);
-	PRM("uint8", T_UINT8);
-	PRM("int32", T_INT32);
-	PRM("uint32", T_UINT32);
-	PRM("int64", T_INT64);
-	PRM("uint64", T_UINT64);
-	PRM("float32", T_FLOAT32);
-	PRM("float64", T_FLOAT64);
 }
 #undef PRM
+
+static int promote_ws_to_semicolon(struct lexer* l)
+{
+	if (l->previous_token_line == l->line) return 0;
+
+	enum token_type tt = l->previous_token.type;
+	int promote =
+		   tt == T_IDENTIFIER
+		|| tt == T_NUMBER
+		|| (tt > T__IDPREDEF_MIN && tt < T__IDPREDEF_MAX)
+		|| tt == T_RETURN
+		|| tt == T_BREAK
+		|| tt == T_CONTINUE
+		|| tt == T_FALLTHROUGH
+		|| tt == T_INC
+		|| tt == T_DEC
+		|| tt == T_RPAREN
+		|| tt == T_RBRACKET
+		|| tt == T_RCURLY;
+	if (promote) l->token.type = T_SEMICOLON;
+	return promote;
+}
 
 static struct token lexer_next(struct lexer* l)
 {
 	for (;;) {
 		assert(l->state_fn != NULL);
 		l->state_fn = l->state_fn(l);
-		if (l->has_token && l->token.type != T_WHITESPACE) { // XXX always skip whitespace?
+		if (l->has_token) {
+			if (l->token.type == T_WHITESPACE && !promote_ws_to_semicolon(l)) continue;
 			promote_identifer_if_keyword(&l->token);
 			l->has_token = 0;
+			l->previous_token = l->token;
+			l->previous_token_line = l->line;
 			return l->token;
 		}
 	}
@@ -1055,6 +1094,7 @@ static struct sexpr* parse_rec(struct parser* p, int depth, int fnlvl)
 				break;
 			case T_BREAK:
 			case T_CONTINUE:
+			case T_FALLTHROUGH:
 				sexpr_append(&stmtc, sexpr_new_atom(t));
 				break;
 			default:
@@ -1260,6 +1300,8 @@ int main(int argc, char** argv)
 	test_parse_body("if 1 {} else if 2 {} else {};", "((if 1 () ((if 2 () ()))))");
 	test_parse_body("if 1 {break;} else if 2 {continue;} else {break;};", "((if 1 ((break)) ((if 2 ((continue)) ((break))))))");
 	test_parse_body("if 1 { if 2 { break; continue; } else { break; }; };", "((if 1 ((if 2 ((break) (continue)) ((break))))))");
+
+	test_parse_body("1 +\n2\n", "((+ 1 2))");
 
 	if (n_failed) {
 		printf("\n %d TEST(S) FAILED\n", n_failed);
