@@ -83,6 +83,7 @@ enum token_type {
 
 	T_COMMA,
 	T_SEMICOLON,
+	T_DOT,
 	T_ASSIGN,
 	T_EQ,
 	T_NEQ,
@@ -351,6 +352,7 @@ static void* lex_main(struct lexer* l)
 		} pnct[] = {
 			{',', T_COMMA},
 			{';', T_SEMICOLON},
+			{'.', T_DOT},
 			{'=', T_ASSIGN},
 			{'+', T_PLUS},
 			{'-', T_MINUS},
@@ -705,6 +707,8 @@ static inline int infix_bp(enum token_type tt)
 			return 50;
 		case T_LPAREN:
 			return 100;
+		case T_DOT:
+			return 200;
 		default:
 			return -1;
 	}
@@ -746,11 +750,11 @@ static struct sexpr* parse_expr_rec(struct parser* p, int rbp, int depth)
 	}
 
 	struct token t = parser_next_token(p);
+	enum token_type tt = t.type;
 
 	// null denotation
 	struct sexpr* left = NULL;
 	{
-		enum token_type tt = t.type;
 		int bp;
 		if (tt == T_NUMBER || tt == T_IDENTIFIER || tt_is_type(tt)) {
 			left = sexpr_new_atom(t);
@@ -782,16 +786,25 @@ static struct sexpr* parse_expr_rec(struct parser* p, int rbp, int depth)
 
 		// left denotation
 		t = parser_next_token(p);
-		if (is_binary_op(t.type)) { // parse binary op
+		tt = t.type;
+		if (is_binary_op(tt)) { // parse binary op
 			int bp = lbp;
-			if (is_binary_op_right_associcative(t.type)) bp--;
+			if (is_binary_op_right_associcative(tt)) bp--;
 			struct sexpr* right = parse_expr_rec(p, bp, depth+1);
 			if (right == NULL) return NULL;
 			left = sexpr_new_list(sexpr_new_atom(t), left, right, NULL);
-		} else if (t.type == T_LPAREN) { // parse call
+		} else if (tt == T_DOT) { // parse member accesses
+			struct sexpr* right = parse_expr_rec(p, lbp, depth+1);
+			if (right == NULL) return NULL;
+			if (right->atom.type != T_IDENTIFIER) {
+				parser_errf(p, "expected identifer");
+				return NULL;
+			}
+			left = sexpr_new_list(sexpr_new_atom(t), left, right, NULL);
+		} else if (tt == T_LPAREN) { // parse call
 			left = sexpr_new_list(left, NULL);
 			struct sexpr** cursor = sexpr_get_append_cursor(left);
-			int more = p->next_token.type != T_RPAREN;
+			int more = !parser_accept(p, T_RPAREN);
 			while (more) {
 				struct sexpr* a = parse_expr_rec(p, 0, depth+1);
 				if (a == NULL) return NULL;
@@ -1257,6 +1270,11 @@ int main(int argc, char** argv)
 	test_parse_expr("fn(x,y)", "(fn x y)");
 	test_parse_expr("fn(x+2,3*y)", "(fn (+ x 2) (* 3 y))");
 	test_parse_expr("foo(x+2,3*y)*4", "(* (foo (+ x 2) (* 3 y)) 4)");
+	test_parse_expr("5 + getx()", "(+ 5 (getx))");
+	test_parse_expr("getx() + 5", "(+ (getx) 5)");
+	test_parse_expr("x.y . z", "(. (. x y) z)");
+	test_parse_expr("(x.y) . z", "(. (. x y) z)");
+	test_parse_expr("getx() . y . z", "(. (. (getx) y) z)");
 
 	test_parse("var x = 5;", "((var x () 5))");
 	test_parse("const x = 5;", "((const x () 5))");
